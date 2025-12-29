@@ -1,7 +1,7 @@
 #### Unreleased
 
 * Add Weighted Moving Average (WMA)
-
+* Add Directional Movement Index (DMI)
 
 #### v0.5.0 - 2021-06-27
 
