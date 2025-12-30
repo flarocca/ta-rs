@@ -1,11 +1,12 @@
 use bencher::{benchmark_group, benchmark_main, black_box, Bencher};
 use rand::Rng;
 use ta::indicators::{
-    AverageTrueRange, BollingerBands, ChandelierExit, CommodityChannelIndex, EfficiencyRatio,
-    ExponentialMovingAverage, FastStochastic, KeltnerChannel, Maximum, MeanAbsoluteDeviation,
-    Minimum, MoneyFlowIndex, MovingAverageConvergenceDivergence, OnBalanceVolume,
-    PercentagePriceOscillator, RateOfChange, RelativeStrengthIndex, SimpleMovingAverage,
-    SlowStochastic, StandardDeviation, TrueRange, WeightedMovingAverage,
+    AverageTrueRange, BollingerBands, ChandelierExit, CommodityChannelIndex,
+    DirectionalMovementIndex, EfficiencyRatio, ExponentialMovingAverage, FastStochastic,
+    KeltnerChannel, Maximum, MeanAbsoluteDeviation, Minimum, MoneyFlowIndex,
+    MovingAverageConvergenceDivergence, OnBalanceVolume, PercentagePriceOscillator, RateOfChange,
+    RelativeStrengthIndex, SimpleMovingAverage, SlowStochastic, StandardDeviation, TrueRange,
+    WeightedMovingAverage,
 };
 use ta::{DataItem, Next};
 
@@ -73,5 +74,6 @@ bench_indicators!(
     SlowStochastic,
     StandardDeviation,
     TrueRange,
-    WeightedMovingAverage
+    WeightedMovingAverage,
+    DirectionalMovementIndex
 );
