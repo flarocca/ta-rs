@@ -76,5 +76,8 @@ pub use self::directional_movement_index::{
 mod wilder_smoothing;
 pub use self::wilder_smoothing::WilderSmoothing;
 
+mod wilder_average_true_range;
+pub use self::wilder_average_true_range::WilderAverageTrueRange;
+
 mod wilder_relative_strength_index;
 pub use self::wilder_relative_strength_index::WilderRelativeStrengthIndex;
