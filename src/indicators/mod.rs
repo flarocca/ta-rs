@@ -72,3 +72,9 @@ mod directional_movement_index;
 pub use self::directional_movement_index::{
     DirectionalMovementIndex, DirectionalMovementIndexOutput,
 };
+
+mod wilder_smoothing;
+pub use self::wilder_smoothing::WilderSmoothing;
+
+mod wilder_relative_strength_index;
+pub use self::wilder_relative_strength_index::WilderRelativeStrengthIndex;
