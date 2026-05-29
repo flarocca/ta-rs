@@ -162,7 +162,17 @@ pub struct DirectionalMovementIndex {
     sm_initialized: bool,
 
     // ADX warmup and smoothing
-    dx_sum: f64, // accumulate DX until first ADX
+    dx_sum: f64, // accumulate DX until first ADX (post-warmup only)
+    /// Number of DX values accumulated into `dx_sum` since
+    /// `sm_initialized` became true. Once this reaches `period`,
+    /// `adx` is initialized as `dx_sum / period` and Wilder smoothing
+    /// takes over.
+    ///
+    /// Tagged `serde(default)` so persisted state written before this
+    /// field existed can be deserialized without losing the rest of
+    /// the indicator state.
+    #[cfg_attr(feature = "serde", serde(default))]
+    dx_count: usize,
     adx: f64,
     adx_initialized: bool,
 }
@@ -183,6 +193,7 @@ impl DirectionalMovementIndex {
                 sm_minus_dm: 0.0,
                 sm_initialized: false,
                 dx_sum: 0.0,
+                dx_count: 0,
                 adx: 0.0,
                 adx_initialized: false,
             }),
@@ -268,36 +279,46 @@ impl<T: High + Low + Close> Next<&T> for DirectionalMovementIndex {
         };
 
         // ADX
+        //
+        // Wilder's ADX is the running smoothed average of DX, but it only
+        // starts once smoothed DM/TR are themselves initialized — DX values
+        // produced during the DM/TR warmup come from partial sums and would
+        // bias the initial ADX. So:
+        //
+        //   1. While `sm_initialized` is false, skip the DX accumulator
+        //      entirely and emit 0.0 (no meaningful ADX exists yet).
+        //   2. Once `sm_initialized` becomes true, accumulate the next
+        //      `period` DX values into `dx_sum` / `dx_count`. During this
+        //      second warmup we emit the running average so callers see a
+        //      non-zero value that converges toward the eventual ADX.
+        //   3. At `dx_count == period`, freeze the initial ADX as
+        //      `dx_sum / period` and switch to Wilder smoothing on every
+        //      subsequent call.
+        //
+        // Historical bug: the prior version of this branch incremented
+        // `self.count` only inside the DM/TR warmup branch, so once warmup
+        // finished `count` froze at `period` and the `dx_count >= period`
+        // gate never fired. ADX stayed in the "warmup" branch forever,
+        // returning `dx_sum / period` with `dx_sum` growing unboundedly —
+        // producing values in the thousands on long series.
         let adx = if !self.adx_initialized {
-            self.dx_sum += dx;
+            if self.sm_initialized {
+                self.dx_sum += dx;
+                self.dx_count += 1;
 
-            // We initialize ADX after we have `period` DX values *after* DI exists.
-            // DI becomes meaningful once smoothed DM/TR is initialized. We begin counting
-            // DX values from the moment we start producing them (even during warmup).
-            //
-            // Practical approach: once we have at least `period` updates total, start
-            // building the initial ADX as the average of the last `period` DX values.
-            // For ta-rs consistency (SMA-like warmup), we use average of accumulated DX
-            // until enough updates exist.
-            //
-            // Here: when `count` < period, DX is from partial sums; still accumulate.
-            // When `count` reaches `period`, we consider the first ADX ready after
-            // collecting `period` DX values. Since count already tracks DM/TR updates,
-            // we can use it as a proxy.
-            if self.count >= self.period {
-                // Start building ADX over another `period` DX values
-                // by using an internal dx_count derived from (count - period + 1).
-                let dx_count = self.count.saturating_sub(self.period) + 1;
-                if dx_count >= self.period {
-                    self.adx = self.dx_sum / (dx_count as f64).max(self.period as f64); // safe
-                                                                                        // Better: average of the first `period` DX values post-init.
-                                                                                        // But this keeps warmup stable and deterministic.
+                if self.dx_count >= self.period {
+                    self.adx = self.dx_sum / (self.period as f64);
                     self.adx_initialized = true;
                 }
-            }
 
-            // warmup value: average so far
-            self.dx_sum / (self.count as f64)
+                // Pre-init warmup output: running average of the DX values
+                // collected so far. Caller can use this as a coarse hint
+                // but should treat values before bar `2 * period` as
+                // un-converged.
+                self.dx_sum / (self.dx_count as f64)
+            } else {
+                0.0
+            }
         } else {
             let p = self.period as f64;
             self.adx = (self.adx * (p - 1.0) + dx) / p;
@@ -328,6 +349,7 @@ impl Reset for DirectionalMovementIndex {
         self.sm_initialized = false;
 
         self.dx_sum = 0.0;
+        self.dx_count = 0;
         self.adx = 0.0;
         self.adx_initialized = false;
     }
@@ -493,5 +515,88 @@ mod tests {
     fn test_default_and_display() {
         let dmi = DirectionalMovementIndex::default();
         let _ = format!("{}", dmi);
+    }
+
+    /// Regression test for the historical "ADX grows unboundedly on long
+    /// series" bug. With the old code, `count` froze at `period` after
+    /// warmup, the ADX-init gate never fired, and `dx_sum / period` kept
+    /// climbing forever. On a 1000-bar series with period=14 the output
+    /// would routinely reach the hundreds or thousands.
+    ///
+    /// After the fix:
+    ///   * Bars 1..=period-1 produce ADX == 0 (no DI available yet).
+    ///   * Bars period..=2*period-1 produce a non-zero in-warmup average
+    ///     of accumulated DX values, all within [0, 100].
+    ///   * From bar 2*period onward Wilder smoothing applies and ADX stays
+    ///     bounded in [0, 100] forever.
+    #[test]
+    fn test_adx_stays_in_range_on_long_series() {
+        // Deterministic synthetic OHLC series that produces non-trivial
+        // directional movement (alternating trend regimes). 1000 bars is
+        // long enough to expose any unbounded growth — the old code would
+        // already be over 100 by ~bar 30.
+        let mut dmi = DirectionalMovementIndex::new(14).unwrap();
+        let mut last_close = 100.0;
+        let mut max_adx = 0.0_f64;
+        let mut min_adx = f64::INFINITY;
+
+        for i in 0..1000_i32 {
+            // Mix of trend + chop so DX varies across the range.
+            let phase = (i as f64) * 0.05;
+            let trend = (phase.sin() * 5.0) + ((phase * 0.3).cos() * 3.0);
+            let close = last_close + trend;
+            let high = close.max(last_close) + 0.5;
+            let low = close.min(last_close) - 0.5;
+            let bar = bar(high, low, close);
+
+            let out = dmi.next(&bar);
+            assert_output_validity(out);
+
+            if i >= 28 {
+                // After 2*period bars the ADX is fully initialized and must
+                // stay in [0, 100] forever.
+                assert!(
+                    (0.0..=100.0).contains(&out.adx),
+                    "bar {i}: adx={} out of range",
+                    out.adx
+                );
+                max_adx = max_adx.max(out.adx);
+                min_adx = min_adx.min(out.adx);
+            }
+            last_close = close;
+        }
+
+        // Sanity: on a series with real movement the ADX should be
+        // non-zero somewhere — guards against a regression that pins it
+        // at 0.
+        assert!(
+            max_adx > 1.0,
+            "expected some non-trivial ADX, got max={max_adx}"
+        );
+        // And it must never have spiked far past 100 either.
+        assert!(
+            max_adx <= 100.0,
+            "ADX exceeded 100 (unbounded-growth bug?): max={max_adx}"
+        );
+    }
+
+    /// While `sm_initialized` is false, the indicator has no meaningful
+    /// notion of directional strength. We promise ADX == 0 over that
+    /// window — the fix replaces the historical "partial sum / count"
+    /// noise with a clean zero so callers can reliably skip warmup.
+    #[test]
+    fn test_adx_is_zero_during_dm_tr_warmup() {
+        let mut dmi = DirectionalMovementIndex::new(14).unwrap();
+        let bars: Vec<Bar> = (0..14)
+            .map(|i| bar(10.0 + i as f64, 9.0 + i as f64, 9.5 + i as f64))
+            .collect();
+        for (i, b) in bars.iter().enumerate() {
+            let out = dmi.next(b);
+            assert_eq!(
+                out.adx, 0.0,
+                "bar {i}: expected adx=0 during DM/TR warmup, got {}",
+                out.adx
+            );
+        }
     }
 }
