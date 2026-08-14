@@ -67,3 +67,20 @@ pub use self::money_flow_index::MoneyFlowIndex;
 
 mod on_balance_volume;
 pub use self::on_balance_volume::OnBalanceVolume;
+
+mod directional_movement_index;
+pub use self::directional_movement_index::{
+    DirectionalMovementIndex, DirectionalMovementIndexOutput,
+};
+
+mod wilder_smoothing;
+pub use self::wilder_smoothing::WilderSmoothing;
+
+mod wilder_average_true_range;
+pub use self::wilder_average_true_range::WilderAverageTrueRange;
+
+mod wilder_relative_strength_index;
+pub use self::wilder_relative_strength_index::WilderRelativeStrengthIndex;
+
+mod volume_weighted_average_price;
+pub use self::volume_weighted_average_price::VolumeWeightedAveragePrice;
