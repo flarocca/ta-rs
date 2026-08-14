@@ -81,3 +81,6 @@ pub use self::wilder_average_true_range::WilderAverageTrueRange;
 
 mod wilder_relative_strength_index;
 pub use self::wilder_relative_strength_index::WilderRelativeStrengthIndex;
+
+mod volume_weighted_average_price;
+pub use self::volume_weighted_average_price::VolumeWeightedAveragePrice;
